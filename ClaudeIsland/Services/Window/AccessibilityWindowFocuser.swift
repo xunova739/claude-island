@@ -45,27 +45,24 @@ struct AccessibilityWindowFocuser {
         // If only one window, raise it
         if windows.count == 1 {
             AXUIElementPerformAction(windows[0], kAXRaiseAction as CFString)
-            NSRunningApplication(processIdentifier: pid_t(terminalPid))?.activate(options: .activateIgnoringOtherApps)
+            activateApp(pid: terminalPid)
             return true
         }
 
         // Multiple windows — use CGWindowList to find which one matches our terminal PID
-        // For multi-process terminals (like Ghostty), each window may have a unique PID
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
             return false
         }
 
-        // Find CGWindow entries matching terminal PID
         let matchingCGWindows = windowList.filter {
             ($0[kCGWindowOwnerPID as String] as? Int) == terminalPid &&
             ($0[kCGWindowLayer as String] as? Int) == 0
         }
 
-        // If exactly one on-screen window for this PID, raise the first AX window
         if matchingCGWindows.count == 1, let first = windows.first {
             AXUIElementPerformAction(first, kAXRaiseAction as CFString)
-            NSRunningApplication(processIdentifier: pid_t(terminalPid))?.activate(options: .activateIgnoringOtherApps)
+            activateApp(pid: terminalPid)
             return true
         }
 
@@ -96,13 +93,36 @@ struct AccessibilityWindowFocuser {
             for term in searchTerms {
                 if titleLower.contains(term.lowercased()) {
                     AXUIElementPerformAction(window, kAXRaiseAction as CFString)
-                    NSRunningApplication(processIdentifier: pid_t(terminalPid))?.activate(options: .activateIgnoringOtherApps)
+                    activateApp(pid: terminalPid)
                     return true
                 }
             }
         }
 
         return false
+    }
+
+    // MARK: - App Activation (works across fullscreen Spaces)
+
+    /// Activate app using AppleScript — more reliable than NSRunningApplication.activate()
+    /// for switching to apps in fullscreen mode on a different Space.
+    static func activateApp(pid: Int) {
+        guard let app = NSRunningApplication(processIdentifier: pid_t(pid)),
+              let appName = app.localizedName else {
+            // Fallback to NSRunningApplication if no name
+            NSRunningApplication(processIdentifier: pid_t(pid))?.activate(options: .activateIgnoringOtherApps)
+            return
+        }
+
+        // AppleScript activation reliably triggers Space switching for fullscreen apps
+        let script = NSAppleScript(source: "tell application \"\(appName)\" to activate")
+        var error: NSDictionary?
+        script?.executeAndReturnError(&error)
+
+        // Belt-and-suspenders: also call NSRunningApplication.activate
+        if error != nil {
+            app.activate(options: .activateIgnoringOtherApps)
+        }
     }
 
     private static func buildSearchTerms(session: SessionState) -> [String] {

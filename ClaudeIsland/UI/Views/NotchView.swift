@@ -424,9 +424,8 @@ struct NotchView: View {
                     if AccessibilityWindowFocuser.focusTerminalWindow(terminalPid: terminalPid, session: session) {
                         return
                     }
-                    if let app = NSRunningApplication(processIdentifier: pid_t(terminalPid)) {
-                        _ = app.activate(options: .activateIgnoringOtherApps)
-                    }
+                    // AppleScript activation works for fullscreen Space switching
+                    AccessibilityWindowFocuser.activateApp(pid: terminalPid)
                 }
             }
         }

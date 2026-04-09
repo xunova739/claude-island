@@ -110,10 +110,8 @@ struct ClaudeInstancesView: View {
                     if AccessibilityWindowFocuser.focusTerminalWindow(terminalPid: terminalPid, session: session) {
                         return
                     }
-                    // Fall back to app-level activation
-                    if let app = NSRunningApplication(processIdentifier: pid_t(terminalPid)) {
-                        _ = app.activate(options: .activateIgnoringOtherApps)
-                    }
+                    // Fall back to AppleScript activation (works with fullscreen Spaces)
+                    AccessibilityWindowFocuser.activateApp(pid: terminalPid)
                     return
                 }
             }
