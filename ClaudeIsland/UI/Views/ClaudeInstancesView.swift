@@ -315,6 +315,9 @@ struct InstanceRow: View {
         .padding(.trailing, 14)
         .padding(.vertical, 10)
         .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            onChat()
+        }
         .onTapGesture {
             onFocus()
         }
