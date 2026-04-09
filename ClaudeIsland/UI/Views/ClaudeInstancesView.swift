@@ -75,7 +75,8 @@ struct ClaudeInstancesView: View {
                         onChat: { openChat(session) },
                         onArchive: { archiveSession(session) },
                         onApprove: { approveSession(session) },
-                        onReject: { rejectSession(session) }
+                        onReject: { rejectSession(session) },
+                        onApproveAll: { approveAllSession(session) }
                     )
                     .id(session.stableId)
                 }
@@ -88,14 +89,29 @@ struct ClaudeInstancesView: View {
     // MARK: - Actions
 
     private func focusSession(_ session: SessionState) {
-        guard session.isInTmux else { return }
-
         Task {
-            if let pid = session.pid {
-                _ = await YabaiController.shared.focusWindow(forClaudePid: pid)
-            } else {
-                _ = await YabaiController.shared.focusWindow(forWorkingDirectory: session.cwd)
+            // Try yabai first for tmux sessions (precise pane switching)
+            if session.isInTmux, let pid = session.pid {
+                if await YabaiController.shared.focusWindow(forClaudePid: pid) {
+                    return
+                }
             }
+
+            // Fallback: find terminal PID via process tree and activate via NSRunningApplication
+            if let sessionPid = session.pid {
+                let tree = ProcessTreeBuilder.shared.buildTree()
+                if let terminalPid = ProcessTreeBuilder.shared.findTerminalPid(forProcess: sessionPid, tree: tree) {
+                    await MainActor.run {
+                        if let app = NSRunningApplication(processIdentifier: pid_t(terminalPid)) {
+                            _ = app.activate(options: .activateIgnoringOtherApps)
+                        }
+                    }
+                    return
+                }
+            }
+
+            // Final fallback: cwd-based yabai
+            _ = await YabaiController.shared.focusWindow(forWorkingDirectory: session.cwd)
         }
     }
 
@@ -109,6 +125,10 @@ struct ClaudeInstancesView: View {
 
     private func rejectSession(_ session: SessionState) {
         sessionMonitor.denyPermission(sessionId: session.sessionId, reason: nil)
+    }
+
+    private func approveAllSession(_ session: SessionState) {
+        sessionMonitor.approveAllPermissions(sessionId: session.sessionId)
     }
 
     private func archiveSession(_ session: SessionState) {
@@ -125,10 +145,10 @@ struct InstanceRow: View {
     let onArchive: () -> Void
     let onApprove: () -> Void
     let onReject: () -> Void
+    let onApproveAll: () -> Void
 
     @State private var isHovered = false
     @State private var spinnerPhase = 0
-    @State private var isYabaiAvailable = false
 
     private let claudeOrange = Color(red: 0.85, green: 0.47, blue: 0.34)
     private let spinnerSymbols = ["·", "✢", "✳", "∗", "✻", "✽"]
@@ -234,20 +254,19 @@ struct InstanceRow: View {
                         onChat()
                     }
 
-                    // Go to Terminal button (only if yabai available)
-                    if isYabaiAvailable {
-                        TerminalButton(
-                            isEnabled: session.isInTmux,
-                            onTap: { onFocus() }
-                        )
-                    }
+                    // Terminal button - always show so user can jump to terminal to reply
+                    TerminalButton(
+                        isEnabled: true,
+                        onTap: { onFocus() }
+                    )
                 }
                 .transition(.opacity.combined(with: .scale(scale: 0.9)))
             } else if isWaitingForApproval {
                 InlineApprovalButtons(
                     onChat: onChat,
                     onApprove: onApprove,
-                    onReject: onReject
+                    onReject: onReject,
+                    onApproveAll: onApproveAll
                 )
                 .transition(.opacity.combined(with: .scale(scale: 0.9)))
             } else {
@@ -257,11 +276,9 @@ struct InstanceRow: View {
                         onChat()
                     }
 
-                    // Focus icon (only for tmux instances with yabai)
-                    if session.isInTmux && isYabaiAvailable {
-                        IconButton(icon: "eye") {
-                            onFocus()
-                        }
+                    // Focus icon - always show
+                    IconButton(icon: "eye") {
+                        onFocus()
                     }
 
                     // Archive button - only for idle or completed sessions
@@ -278,8 +295,8 @@ struct InstanceRow: View {
         .padding(.trailing, 14)
         .padding(.vertical, 10)
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            onChat()
+        .onTapGesture {
+            onFocus()
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isWaitingForApproval)
         .background(
@@ -287,9 +304,6 @@ struct InstanceRow: View {
                 .fill(isHovered ? Color.white.opacity(0.06) : Color.clear)
         )
         .onHover { isHovered = $0 }
-        .task {
-            isYabaiAvailable = await WindowFinder.shared.isYabaiAvailable()
-        }
     }
 
     @ViewBuilder
@@ -329,10 +343,12 @@ struct InlineApprovalButtons: View {
     let onChat: () -> Void
     let onApprove: () -> Void
     let onReject: () -> Void
+    let onApproveAll: () -> Void
 
     @State private var showChatButton = false
     @State private var showDenyButton = false
     @State private var showAllowButton = false
+    @State private var showAllowAllButton = false
 
     var body: some View {
         HStack(spacing: 6) {
@@ -372,6 +388,21 @@ struct InlineApprovalButtons: View {
             .buttonStyle(.plain)
             .opacity(showAllowButton ? 1 : 0)
             .scaleEffect(showAllowButton ? 1 : 0.8)
+
+            Button {
+                onApproveAll()
+            } label: {
+                Text("全部允许")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.black)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color(red: 1.0, green: 0.8, blue: 0.3))
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .opacity(showAllowAllButton ? 1 : 0)
+            .scaleEffect(showAllowAllButton ? 1 : 0.8)
         }
         .onAppear {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7).delay(0.0)) {
@@ -382,6 +413,9 @@ struct InlineApprovalButtons: View {
             }
             withAnimation(.spring(response: 0.3, dampingFraction: 0.7).delay(0.1)) {
                 showAllowButton = true
+            }
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.7).delay(0.15)) {
+                showAllowAllButton = true
             }
         }
     }

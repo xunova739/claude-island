@@ -15,6 +15,9 @@ class ClaudeSessionMonitor: ObservableObject {
     @Published var instances: [SessionState] = []
     @Published var pendingInstances: [SessionState] = []
 
+    /// Sessions for which all future permissions should be auto-approved
+    private var autoApproveSessions: Set<String> = []
+
     private var cancellables = Set<AnyCancellable>()
 
     init() {
@@ -94,6 +97,12 @@ class ClaudeSessionMonitor: ObservableObject {
         }
     }
 
+    /// Approve current permission AND auto-approve all future ones for this session
+    func approveAllPermissions(sessionId: String) {
+        autoApproveSessions.insert(sessionId)
+        approvePermission(sessionId: sessionId)
+    }
+
     func denyPermission(sessionId: String, reason: String?) {
         Task {
             guard let session = await SessionStore.shared.session(for: sessionId),
@@ -125,6 +134,18 @@ class ClaudeSessionMonitor: ObservableObject {
     private func updateFromSessions(_ sessions: [SessionState]) {
         instances = sessions
         pendingInstances = sessions.filter { $0.needsAttention }
+
+        // Auto-approve sessions that have been granted blanket approval
+        for session in sessions {
+            if autoApproveSessions.contains(session.sessionId),
+               case .waitingForApproval = session.phase {
+                approvePermission(sessionId: session.sessionId)
+            }
+        }
+
+        // Clean up auto-approve for ended sessions
+        let activeIds = Set(sessions.map { $0.sessionId })
+        autoApproveSessions = autoApproveSessions.filter { activeIds.contains($0) }
     }
 
     // MARK: - History Loading (for UI)
