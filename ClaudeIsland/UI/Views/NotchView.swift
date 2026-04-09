@@ -515,7 +515,7 @@ struct NotchView: View {
                 var claudeSessionFocused = false
                 for session in newSessions {
                     if let pid = session.pid,
-                       await TerminalVisibilityDetector.isSessionFocused(sessionPid: pid) {
+                       await TerminalVisibilityDetector.isSessionFocused(sessionPid: pid, cwd: session.cwd) {
                         claudeSessionFocused = true
                         break
                     }
@@ -583,7 +583,7 @@ struct NotchView: View {
                 Task {
                     let isFocused: Bool
                     if let pid = session.pid {
-                        isFocused = await TerminalVisibilityDetector.isSessionFocused(sessionPid: pid)
+                        isFocused = await TerminalVisibilityDetector.isSessionFocused(sessionPid: pid, cwd: session.cwd)
                     } else {
                         isFocused = false
                     }
@@ -645,7 +645,7 @@ struct NotchView: View {
                 return true
             }
 
-            let isFocused = await TerminalVisibilityDetector.isSessionFocused(sessionPid: pid)
+            let isFocused = await TerminalVisibilityDetector.isSessionFocused(sessionPid: pid, cwd: session.cwd)
             if !isFocused {
                 return true
             }
