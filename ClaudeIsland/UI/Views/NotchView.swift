@@ -419,10 +419,23 @@ struct NotchView: View {
         let currentIds = Set(sessions.map { $0.stableId })
         let newPendingIds = currentIds.subtracting(previousPendingIds)
 
-        if !newPendingIds.isEmpty &&
-           viewModel.status == .closed &&
-           !TerminalVisibilityDetector.isTerminalVisibleOnCurrentSpace() {
-            viewModel.notchOpen(reason: .notification)
+        if !newPendingIds.isEmpty && viewModel.status == .closed {
+            let newSessions = sessions.filter { newPendingIds.contains($0.stableId) }
+            Task { @MainActor in
+                // Only suppress notification if the specific Claude session is frontmost.
+                // Other terminal windows (or any other app) should still trigger the notch.
+                var claudeSessionFocused = false
+                for session in newSessions {
+                    if let pid = session.pid,
+                       await TerminalVisibilityDetector.isSessionFocused(sessionPid: pid) {
+                        claudeSessionFocused = true
+                        break
+                    }
+                }
+                if !claudeSessionFocused && viewModel.status == .closed {
+                    viewModel.notchOpen(reason: .notification)
+                }
+            }
         }
 
         previousPendingIds = currentIds
