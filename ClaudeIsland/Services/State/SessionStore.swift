@@ -154,6 +154,14 @@ actor SessionStore {
             updateToolStatus(in: &session, toolId: toolUseId, status: .waitingForApproval)
         }
 
+        // Safety net: if a tool completed (PostToolUse) but session is still in
+        // waitingForApproval (user approved in terminal, bypassing the notch),
+        // force-clear the stale approval state.
+        if event.event == "PostToolUse", case .waitingForApproval = session.phase {
+            Self.logger.debug("PostToolUse received while waitingForApproval — clearing stale approval (terminal approval)")
+            session.phase = .processing
+        }
+
         processToolTracking(event: event, session: &session)
         processSubagentTracking(event: event, session: &session)
 
