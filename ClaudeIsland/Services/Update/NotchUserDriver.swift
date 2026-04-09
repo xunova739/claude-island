@@ -137,29 +137,39 @@ class UpdateManager: NSObject, ObservableObject {
         let tempDir = FileManager.default.temporaryDirectory
         let destURL = tempDir.appendingPathComponent(dmgName)
 
+        // Remove old file if exists
+        try? FileManager.default.removeItem(at: destURL)
+
         do {
-            // Stream download with progress
+            // Use chunk-based download with progress reporting
             let (asyncBytes, response) = try await URLSession.shared.bytes(from: url)
             let totalBytes = (response as? HTTPURLResponse)?
                 .value(forHTTPHeaderField: "Content-Length")
                 .flatMap { Int64($0) } ?? 0
 
+            // Buffer into 64KB chunks for efficiency
+            var buffer = Data(capacity: min(Int(totalBytes), 4 * 1024 * 1024))
             var receivedBytes: Int64 = 0
-            var data = Data()
+            var chunk = Data(capacity: 65536)
 
             for try await byte in asyncBytes {
-                data.append(byte)
-                receivedBytes += 1
-                if totalBytes > 0 && receivedBytes % 65536 == 0 {
-                    let progress = Double(receivedBytes) / Double(totalBytes)
-                    state = .downloading(progress: min(progress, 1.0))
+                chunk.append(byte)
+                if chunk.count >= 65536 {
+                    buffer.append(chunk)
+                    receivedBytes += Int64(chunk.count)
+                    chunk = Data(capacity: 65536)
+                    if totalBytes > 0 {
+                        state = .downloading(progress: min(Double(receivedBytes) / Double(totalBytes), 0.99))
+                    }
                 }
             }
+            // Append remaining
+            buffer.append(chunk)
+            state = .downloading(progress: 1.0)
 
             state = .extracting(progress: 0.5)
-            try data.write(to: destURL)
+            try buffer.write(to: destURL)
             state = .extracting(progress: 1.0)
-
             downloadedDMGURL = destURL
             state = .readyToInstall(version: latestVersion)
         } catch {
