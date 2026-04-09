@@ -605,8 +605,15 @@ struct NotchView: View {
 
     /// Determine if notification sound should play for the given sessions
     /// Returns true if ANY session is not actively focused
-    /// PIDs of all apps that own visible windows (layer 0). Thread-safe via CoreGraphics.
+    /// PIDs suitable for host-app matching — regular apps only (excludes Electron helpers).
     private func visibleWindowOwnerPids() -> Set<Int> {
+        let regularPids = Set(
+            NSWorkspace.shared.runningApplications
+                .filter { $0.activationPolicy == .regular }
+                .map { Int($0.processIdentifier) }
+        )
+        if !regularPids.isEmpty { return regularPids }
+
         let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         guard let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] else {
             return []

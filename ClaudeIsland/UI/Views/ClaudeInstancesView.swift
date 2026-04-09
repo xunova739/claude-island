@@ -143,8 +143,19 @@ struct ClaudeInstancesView: View {
         sessionMonitor.archiveSession(sessionId: session.sessionId)
     }
 
-    /// PIDs of all apps that own visible windows (layer 0). Thread-safe via CoreGraphics.
+    /// PIDs suitable for host-app matching. Uses NSWorkspace regular apps (filters out
+    /// Electron Helper / renderer processes), falling back to all CGWindowList owners.
     private static func visibleWindowOwnerPids() -> Set<Int> {
+        // Prefer NSWorkspace regular apps — these are the actual application main processes.
+        // This correctly identifies Obsidian (main) rather than "Obsidian Helper (Renderer)".
+        let regularPids = Set(
+            NSWorkspace.shared.runningApplications
+                .filter { $0.activationPolicy == .regular }
+                .map { Int($0.processIdentifier) }
+        )
+        if !regularPids.isEmpty { return regularPids }
+
+        // Fallback: all CGWindowList window owner PIDs (thread-safe)
         let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         guard let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] else {
             return []
