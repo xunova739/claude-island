@@ -71,23 +71,36 @@ struct ProcessTreeBuilder: Sendable {
         return false
     }
 
-    /// Walk up the process tree to find the terminal app PID
+    /// Walk up the process tree to find the terminal (or any host GUI app) PID.
+    /// Falls back to any running GUI app ancestor (e.g. Obsidian, Cursor, any IDE with terminal plugin).
     nonisolated func findTerminalPid(forProcess pid: Int, tree: [Int: ProcessInfo]) -> Int? {
+        findTerminalOrHostPid(forProcess: pid, tree: tree, runningPids: nil)
+    }
+
+    /// Same as findTerminalPid but accepts a pre-built set of running app PIDs for efficiency.
+    nonisolated func findTerminalOrHostPid(forProcess pid: Int, tree: [Int: ProcessInfo], runningPids: Set<Int>?) -> Int? {
         var current = pid
         var depth = 0
+        var firstHostPid: Int? = nil
 
         while current > 1 && depth < 20 {
             guard let info = tree[current] else { break }
 
+            // Prefer known terminals
             if TerminalAppRegistry.isTerminal(info.command) {
                 return current
+            }
+
+            // Track first running-app PID as fallback (handles Obsidian, IDEs, etc.)
+            if firstHostPid == nil, let pids = runningPids, pids.contains(current) {
+                firstHostPid = current
             }
 
             current = info.ppid
             depth += 1
         }
 
-        return nil
+        return firstHostPid
     }
 
     /// Check if targetPid is a descendant of ancestorPid

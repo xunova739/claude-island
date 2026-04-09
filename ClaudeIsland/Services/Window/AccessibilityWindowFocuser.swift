@@ -13,9 +13,8 @@ struct AccessibilityWindowFocuser {
     /// Focus the terminal window containing a Claude session.
     /// Returns true if a specific window was raised.
     static func focusTerminalWindow(terminalPid: Int, session: SessionState) -> Bool {
-        // Prompt for accessibility permission on first call
-        let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
-        guard AXIsProcessTrustedWithOptions(options) else {
+        // Only check silently - don't prompt here (prompting should be done at app startup if needed)
+        guard AXIsProcessTrusted() else {
             return false
         }
 

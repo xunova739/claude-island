@@ -413,17 +413,19 @@ struct NotchView: View {
                     return
                 }
             }
-            // AX window focus
+            // AX window focus + host app fallback (handles Obsidian, IDEs, etc.)
             if let sessionPid = session.pid {
                 let tree = ProcessTreeBuilder.shared.buildTree()
-                if let terminalPid = ProcessTreeBuilder.shared.findTerminalPid(forProcess: sessionPid, tree: tree) {
+                let runningPids = Set(NSWorkspace.shared.runningApplications.map { Int($0.processIdentifier) })
+                let hostPid = ProcessTreeBuilder.shared.findTerminalOrHostPid(
+                    forProcess: sessionPid, tree: tree, runningPids: runningPids
+                )
+                if let terminalPid = hostPid {
                     if AccessibilityWindowFocuser.focusTerminalWindow(terminalPid: terminalPid, session: session) {
                         return
                     }
-                    await MainActor.run {
-                        if let app = NSRunningApplication(processIdentifier: pid_t(terminalPid)) {
-                            _ = app.activate(options: .activateIgnoringOtherApps)
-                        }
+                    if let app = NSRunningApplication(processIdentifier: pid_t(terminalPid)) {
+                        _ = app.activate(options: .activateIgnoringOtherApps)
                     }
                 }
             }
