@@ -378,30 +378,48 @@ struct NotchView: View {
 
     @ViewBuilder
     private func notificationCardForSession(_ session: SessionState) -> some View {
-        // Use live session data instead of stale snapshot
         let liveSession = sessionMonitor.instances.first { $0.sessionId == session.sessionId } ?? session
+        // Count other sessions also needing attention (excluding current)
+        let otherPendingCount = sessionMonitor.pendingInstances.filter {
+            $0.sessionId != session.sessionId &&
+            !sessionMonitor.autoApproveSessions.contains($0.sessionId)
+        }.count
         NotificationCardView(
             session: liveSession,
             countdown: viewModel.autoDismissCountdown,
+            otherPendingCount: otherPendingCount,
             onApprove: {
                 sessionMonitor.approvePermission(sessionId: session.sessionId)
-                viewModel.notchClose()
+                showNextPendingOrClose(excluding: session.sessionId)
             },
             onDeny: {
                 sessionMonitor.denyPermission(sessionId: session.sessionId, reason: nil)
-                viewModel.notchClose()
+                showNextPendingOrClose(excluding: session.sessionId)
             },
             onApproveAll: {
                 sessionMonitor.approveAllPermissions(sessionId: session.sessionId)
-                viewModel.notchClose()
+                showNextPendingOrClose(excluding: session.sessionId)
             },
             onChat: {
                 viewModel.cancelAutoDismiss()
                 viewModel.showChat(for: session)
             },
             onFocus: { focusSessionFromNotch(session) },
-            onDismiss: { viewModel.notchClose() }
+            onDismiss: { showNextPendingOrClose(excluding: session.sessionId) }
         )
+    }
+
+    /// After handling a session, show the next pending one or close the notch.
+    private func showNextPendingOrClose(excluding sessionId: String) {
+        let next = sessionMonitor.pendingInstances.first {
+            $0.sessionId != sessionId &&
+            !sessionMonitor.autoApproveSessions.contains($0.sessionId)
+        }
+        if let nextSession = next {
+            viewModel.notchOpenForNotification(session: nextSession)
+        } else {
+            viewModel.notchClose()
+        }
     }
 
     private func focusSessionFromNotch(_ session: SessionState) {
@@ -585,20 +603,17 @@ struct NotchView: View {
         previousWaitingForInputIds = currentIds
     }
 
-    /// Auto-dismiss notification card if the session's phase changed (e.g., approved from terminal)
+    /// Auto-advance or dismiss notification card when session phase changes (e.g., approved from terminal)
     private func handleNotificationCardStaleness(_ instances: [SessionState]) {
         guard case .notification(let notifSession) = viewModel.contentType else { return }
 
-        // Find the live session
         guard let liveSession = instances.first(where: { $0.sessionId == notifSession.sessionId }) else {
-            // Session gone — dismiss
-            viewModel.notchClose()
+            showNextPendingOrClose(excluding: notifSession.sessionId)
             return
         }
 
-        // If the session is no longer needing attention (was approved/denied from terminal, or started processing again), dismiss
         if !liveSession.needsAttention {
-            viewModel.notchClose()
+            showNextPendingOrClose(excluding: notifSession.sessionId)
         }
     }
 

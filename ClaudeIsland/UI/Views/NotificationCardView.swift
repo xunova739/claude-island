@@ -10,6 +10,7 @@ import SwiftUI
 struct NotificationCardView: View {
     let session: SessionState
     let countdown: Int
+    let otherPendingCount: Int
     let onApprove: () -> Void
     let onDeny: () -> Void
     let onApproveAll: () -> Void
@@ -33,6 +34,17 @@ struct NotificationCardView: View {
                     .lineLimit(1)
 
                 Spacer()
+
+                // Badge showing how many other sessions also need attention
+                if otherPendingCount > 0 {
+                    Text("+\(otherPendingCount) 待处理")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(TerminalColors.amber)
+                        .clipShape(Capsule())
+                }
 
                 if countdown > 0 {
                     Text("\(countdown)s")
