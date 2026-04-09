@@ -274,6 +274,16 @@ class NotchViewModel: ObservableObject {
             return
         }
 
+        // Manual open (click/hover): if currently showing a completion notification card
+        // (waitingForInput, not waitingForApproval), switch to instances list.
+        // Approval cards are kept since user still needs to act on them.
+        if case .notification(let notifSession) = contentType,
+           !notifSession.phase.isWaitingForApproval {
+            cancelAutoDismiss()
+            contentType = .instances
+            return
+        }
+
         // Restore chat session if we had one open before
         if let chatSession = currentChatSession {
             // Avoid unnecessary updates if already showing this chat

@@ -409,11 +409,13 @@ struct NotchView: View {
         )
     }
 
-    /// After handling a session, show the next pending one or close the notch.
+    /// After handling a session, show the next APPROVAL notification or close.
+    /// Task completion (waitingForInput) is NOT queued here — it shows once then goes away.
     private func showNextPendingOrClose(excluding sessionId: String) {
         let next = sessionMonitor.pendingInstances.first {
             $0.sessionId != sessionId &&
-            !sessionMonitor.autoApproveSessions.contains($0.sessionId)
+            !sessionMonitor.autoApproveSessions.contains($0.sessionId) &&
+            $0.phase.isWaitingForApproval  // Only approvals queue up; completions don't
         }
         if let nextSession = next {
             viewModel.notchOpenForNotification(session: nextSession)
