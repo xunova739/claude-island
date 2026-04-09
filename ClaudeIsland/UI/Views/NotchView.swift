@@ -580,17 +580,26 @@ struct NotchView: View {
                 }
             }
 
-            // Open notification card for the completed session (if not focused)
-            if viewModel.status == .closed, let session = newlyWaitingSessions.first {
-                Task {
-                    let isFocused: Bool
-                    if let pid = session.pid {
-                        isFocused = await TerminalVisibilityDetector.isSessionFocused(sessionPid: pid, cwd: session.cwd)
-                    } else {
-                        isFocused = false
-                    }
-                    if !isFocused && viewModel.status == .closed {
-                        viewModel.notchOpenForNotification(session: session)
+            // Open notification card for the completed session (if not focused).
+            // Delay 1.5s: Claude sometimes fires Stop briefly between tool calls before
+            // continuing with the final summary. Only show if still waitingForInput after delay.
+            if let session = newlyWaitingSessions.first {
+                let stableId = session.stableId
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [self] in
+                    // Verify session is still waitingForInput (not back to processing)
+                    guard let liveSession = sessionMonitor.instances.first(where: { $0.stableId == stableId }),
+                          liveSession.phase == .waitingForInput,
+                          viewModel.status == .closed else { return }
+                    Task {
+                        let isFocused: Bool
+                        if let pid = liveSession.pid {
+                            isFocused = await TerminalVisibilityDetector.isSessionFocused(sessionPid: pid, cwd: liveSession.cwd)
+                        } else {
+                            isFocused = false
+                        }
+                        if !isFocused && viewModel.status == .closed {
+                            viewModel.notchOpenForNotification(session: liveSession)
+                        }
                     }
                 }
             }
