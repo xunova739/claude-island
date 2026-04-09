@@ -9,7 +9,6 @@ import ApplicationServices
 import Combine
 import SwiftUI
 import ServiceManagement
-import Sparkle
 
 // MARK: - NotchMenuView
 

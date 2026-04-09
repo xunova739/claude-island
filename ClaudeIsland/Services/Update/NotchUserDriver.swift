@@ -2,20 +2,22 @@
 //  NotchUserDriver.swift
 //  ClaudeIsland
 //
-//  Custom Sparkle user driver for in-notch update UI
+//  GitHub Releases-based update manager (replaces Sparkle)
+//  Downloads latest build from xunova739/claude-island releases
 //
 
+import AppKit
 import Combine
 import Foundation
-import Sparkle
 
-/// Update state published to UI
+// MARK: - UpdateState
+
 enum UpdateState: Equatable {
     case idle
     case checking
     case upToDate
     case found(version: String, releaseNotes: String?)
-    case downloading(progress: Double)  // 0.0 to 1.0
+    case downloading(progress: Double)
     case extracting(progress: Double)
     case readyToInstall(version: String)
     case installing
@@ -23,269 +25,249 @@ enum UpdateState: Equatable {
 
     var isActive: Bool {
         switch self {
-        case .idle, .upToDate, .error:
-            return false
-        default:
-            return true
+        case .idle, .upToDate, .error: return false
+        default: return true
         }
     }
 }
 
-/// Observable update manager that bridges Sparkle to SwiftUI
+// MARK: - UpdateManager
+
 @MainActor
 class UpdateManager: NSObject, ObservableObject {
     static let shared = UpdateManager()
 
     @Published var state: UpdateState = .idle
     @Published var hasUnseenUpdate: Bool = false
-    private var hasSeenUpdateThisSession: Bool = false
 
-    private var downloadedBytes: Int64 = 0
-    private var expectedBytes: Int64 = 0
-    private var currentVersion: String = ""
+    private let owner = "xunova739"
+    private let repo = "claude-island"
+    private let releaseTag = "latest-build"
+    private let dmgName = "ClaudeIsland-focused-notch.dmg"
 
-    // Callbacks from Sparkle
-    private var installHandler: ((SPUUserUpdateChoice) -> Void)?
-    private var cancellationHandler: (() -> Void)?
+    private var downloadTask: URLSessionDownloadTask?
+    private var downloadedDMGURL: URL?
+    private var latestVersion: String = ""
 
-    override init() {
-        super.init()
-    }
+    override init() { super.init() }
 
     // MARK: - Public API
 
     func checkForUpdates() {
         state = .checking
-        if let updater = AppDelegate.shared?.updater {
-            updater.checkForUpdates()
-        } else {
-            state = .error(message: "Updater not initialized")
+        Task {
+            await fetchLatestRelease()
         }
     }
 
     func downloadAndInstall() {
-        installHandler?(.install)
+        guard let url = downloadURL() else {
+            state = .error(message: "No download URL found")
+            return
+        }
+        Task {
+            await downloadDMG(from: url)
+        }
     }
 
     func installAndRelaunch() {
-        installHandler?(.install)
-    }
-
-    func skipUpdate() {
-        installHandler?(.skip)
-        state = .idle
-    }
-
-    func dismissUpdate() {
-        installHandler?(.dismiss)
-        state = .idle
-    }
-
-    func cancelDownload() {
-        cancellationHandler?()
-        state = .idle
-    }
-
-    // MARK: - Internal state updates (called by NotchUserDriver)
-
-    func updateFound(version: String, releaseNotes: String?, installHandler: @escaping (SPUUserUpdateChoice) -> Void) {
-        self.currentVersion = version
-        self.installHandler = installHandler
-        self.state = .found(version: version, releaseNotes: releaseNotes)
-        // Only show the dot if user hasn't seen it this session
-        if !hasSeenUpdateThisSession {
-            self.hasUnseenUpdate = true
+        guard let dmgURL = downloadedDMGURL else {
+            state = .error(message: "No downloaded file")
+            return
+        }
+        Task {
+            await mountAndInstall(dmgURL: dmgURL)
         }
     }
 
     func markUpdateSeen() {
-        self.hasUnseenUpdate = false
-        self.hasSeenUpdateThisSession = true
+        hasUnseenUpdate = false
     }
 
-    func downloadStarted(cancellation: @escaping () -> Void) {
-        self.cancellationHandler = cancellation
-        self.downloadedBytes = 0
-        self.expectedBytes = 0
-        self.state = .downloading(progress: 0)
+    func cancelDownload() {
+        downloadTask?.cancel()
+        state = .idle
     }
 
-    func downloadExpectedLength(_ length: UInt64) {
-        self.expectedBytes = Int64(length)
+    // MARK: - GitHub API
+
+    private var _downloadURL: URL?
+
+    private func downloadURL() -> URL? { _downloadURL }
+
+    private func fetchLatestRelease() async {
+        let apiURL = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/releases/tags/\(releaseTag)")!
+        var request = URLRequest(url: apiURL)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                state = .upToDate
+                return
+            }
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let assets = json["assets"] as? [[String: Any]],
+                  let dmgAsset = assets.first(where: {
+                      ($0["name"] as? String)?.hasSuffix(".dmg") == true
+                  }),
+                  let downloadURLStr = dmgAsset["browser_download_url"] as? String,
+                  let downloadURL = URL(string: downloadURLStr) else {
+                state = .upToDate
+                return
+            }
+
+            let versionName = (json["name"] as? String) ?? releaseTag
+            let body = (json["body"] as? String) ?? ""
+            _downloadURL = downloadURL
+            latestVersion = versionName
+            state = .found(version: versionName, releaseNotes: body)
+            hasUnseenUpdate = true
+        } catch {
+            state = .error(message: "Network error: \(error.localizedDescription)")
+        }
     }
 
-    func downloadReceivedData(_ length: UInt64) {
-        self.downloadedBytes += Int64(length)
-        let progress = expectedBytes > 0 ? Double(downloadedBytes) / Double(expectedBytes) : 0
-        self.state = .downloading(progress: min(progress, 1.0))
+    // MARK: - Download
+
+    private func downloadDMG(from url: URL) async {
+        state = .downloading(progress: 0)
+
+        let tempDir = FileManager.default.temporaryDirectory
+        let destURL = tempDir.appendingPathComponent(dmgName)
+
+        do {
+            // Stream download with progress
+            let (asyncBytes, response) = try await URLSession.shared.bytes(from: url)
+            let totalBytes = (response as? HTTPURLResponse)?
+                .value(forHTTPHeaderField: "Content-Length")
+                .flatMap { Int64($0) } ?? 0
+
+            var receivedBytes: Int64 = 0
+            var data = Data()
+
+            for try await byte in asyncBytes {
+                data.append(byte)
+                receivedBytes += 1
+                if totalBytes > 0 && receivedBytes % 65536 == 0 {
+                    let progress = Double(receivedBytes) / Double(totalBytes)
+                    state = .downloading(progress: min(progress, 1.0))
+                }
+            }
+
+            state = .extracting(progress: 0.5)
+            try data.write(to: destURL)
+            state = .extracting(progress: 1.0)
+
+            downloadedDMGURL = destURL
+            state = .readyToInstall(version: latestVersion)
+        } catch {
+            state = .error(message: "Download failed: \(error.localizedDescription)")
+        }
     }
 
-    func extractionStarted() {
-        self.state = .extracting(progress: 0)
+    // MARK: - Mount & Install
+
+    private func mountAndInstall(dmgURL: URL) async {
+        state = .installing
+
+        // Mount DMG
+        let mountResult = await runShell("/usr/bin/hdiutil", args: [
+            "attach", dmgURL.path, "-nobrowse", "-quiet"
+        ])
+
+        guard mountResult.exitCode == 0 else {
+            state = .error(message: "Failed to mount DMG")
+            return
+        }
+
+        // Find mounted volume
+        guard let volumePath = findMountedVolume() else {
+            state = .error(message: "Could not find mounted volume")
+            return
+        }
+
+        let appSource = (volumePath as NSString).appendingPathComponent("Claude Island.app")
+
+        // Use AppleScript to copy with admin privileges (shows macOS password dialog)
+        let installScript = """
+        do shell script "cp -Rf '\(appSource)' '/Applications/'" with administrator privileges
+        """
+
+        let scriptResult = await runAppleScript(installScript)
+
+        // Unmount DMG
+        _ = await runShell("/usr/bin/hdiutil", args: ["detach", volumePath, "-quiet"])
+
+        if scriptResult {
+            // Relaunch
+            let appPath = "/Applications/Claude Island.app"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                let url = URL(fileURLWithPath: appPath)
+                let config = NSWorkspace.OpenConfiguration()
+                NSWorkspace.shared.openApplication(at: url, configuration: config) { _, _ in }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    NSApplication.shared.terminate(nil)
+                }
+            }
+        } else {
+            state = .error(message: "Install failed — try running manually")
+        }
     }
 
-    func extractionProgress(_ progress: Double) {
-        self.state = .extracting(progress: progress)
+    private func findMountedVolume() -> String? {
+        let volumesURL = URL(fileURLWithPath: "/Volumes")
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: volumesURL, includingPropertiesForKeys: nil
+        ) else { return nil }
+
+        for vol in contents {
+            let appPath = vol.appendingPathComponent("Claude Island.app").path
+            if FileManager.default.fileExists(atPath: appPath) {
+                return vol.path
+            }
+        }
+        return nil
     }
 
-    func readyToInstall(installHandler: @escaping (SPUUserUpdateChoice) -> Void) {
-        self.installHandler = installHandler
-        self.state = .readyToInstall(version: currentVersion)
+    // MARK: - Shell Helpers
+
+    private struct ShellResult {
+        let exitCode: Int32
+        let output: String
     }
 
-    func installing() {
-        self.state = .installing
-    }
-
-    func installed(relaunched: Bool) {
-        self.state = .idle
-    }
-
-    func noUpdateFound() {
-        self.state = .upToDate
-        // Reset to idle after a few seconds
-        Task {
-            try? await Task.sleep(for: .seconds(5))
-            if case .upToDate = self.state {
-                self.state = .idle
+    private func runShell(_ executable: String, args: [String]) async -> ShellResult {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: executable)
+                process.arguments = args
+                let pipe = Pipe()
+                process.standardOutput = pipe
+                process.standardError = pipe
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    let output = String(data: data, encoding: .utf8) ?? ""
+                    continuation.resume(returning: ShellResult(exitCode: process.terminationStatus, output: output))
+                } catch {
+                    continuation.resume(returning: ShellResult(exitCode: -1, output: error.localizedDescription))
+                }
             }
         }
     }
 
-    func updateError(_ message: String) {
-        self.state = .error(message: message)
-    }
-
-    func dismiss() {
-        // Don't dismiss if we're showing "up to date" - let it display
-        if case .upToDate = state {
-            return
+    private func runAppleScript(_ source: String) async -> Bool {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                var error: NSDictionary?
+                let script = NSAppleScript(source: source)
+                script?.executeAndReturnError(&error)
+                continuation.resume(returning: error == nil)
+            }
         }
-        self.state = .idle
-        self.installHandler = nil
-        self.cancellationHandler = nil
-    }
-}
-
-/// Custom Sparkle user driver that routes all UI to NotchUpdateManager
-class NotchUserDriver: NSObject, SPUUserDriver {
-
-    var canCheckForUpdates: Bool { true }
-
-    // MARK: - Update Found
-
-    func show(_ request: SPUUpdatePermissionRequest, reply: @escaping (SUUpdatePermissionResponse) -> Void) {
-        // Auto-approve update checks
-        reply(SUUpdatePermissionResponse(automaticUpdateChecks: true, sendSystemProfile: false))
-    }
-
-    func showUserInitiatedUpdateCheck(cancellation: @escaping () -> Void) {
-        Task { @MainActor in
-            UpdateManager.shared.state = .checking
-        }
-    }
-
-    func showUpdateFound(with appcastItem: SUAppcastItem, state: SPUUserUpdateState, reply: @escaping (SPUUserUpdateChoice) -> Void) {
-        let version = appcastItem.displayVersionString
-        let releaseNotes = appcastItem.itemDescription
-
-        Task { @MainActor in
-            UpdateManager.shared.updateFound(version: version, releaseNotes: releaseNotes, installHandler: reply)
-        }
-    }
-
-    func showUpdateReleaseNotes(with downloadData: SPUDownloadData) {
-        // Release notes downloaded - we already have them from appcastItem
-    }
-
-    func showUpdateReleaseNotesFailedToDownloadWithError(_ error: Error) {
-        // Ignore release notes failures
-    }
-
-    func showUpdateNotFoundWithError(_ error: Error, acknowledgement: @escaping () -> Void) {
-        Task { @MainActor in
-            UpdateManager.shared.noUpdateFound()
-        }
-        acknowledgement()
-    }
-
-    func showUpdaterError(_ error: Error, acknowledgement: @escaping () -> Void) {
-        Task { @MainActor in
-            UpdateManager.shared.updateError(error.localizedDescription)
-        }
-        acknowledgement()
-    }
-
-    // MARK: - Download Progress
-
-    func showDownloadInitiated(cancellation: @escaping () -> Void) {
-        Task { @MainActor in
-            UpdateManager.shared.downloadStarted(cancellation: cancellation)
-        }
-    }
-
-    func showDownloadDidReceiveExpectedContentLength(_ expectedContentLength: UInt64) {
-        Task { @MainActor in
-            UpdateManager.shared.downloadExpectedLength(expectedContentLength)
-        }
-    }
-
-    func showDownloadDidReceiveData(ofLength length: UInt64) {
-        Task { @MainActor in
-            UpdateManager.shared.downloadReceivedData(length)
-        }
-    }
-
-    func showDownloadDidStartExtractingUpdate() {
-        Task { @MainActor in
-            UpdateManager.shared.extractionStarted()
-        }
-    }
-
-    func showExtractionReceivedProgress(_ progress: Double) {
-        Task { @MainActor in
-            UpdateManager.shared.extractionProgress(progress)
-        }
-    }
-
-    func showReady(toInstallAndRelaunch reply: @escaping (SPUUserUpdateChoice) -> Void) {
-        Task { @MainActor in
-            UpdateManager.shared.readyToInstall(installHandler: reply)
-        }
-    }
-
-    func showInstallingUpdate(withApplicationTerminated applicationTerminated: Bool, retryTerminatingApplication: @escaping () -> Void) {
-        Task { @MainActor in
-            UpdateManager.shared.installing()
-        }
-    }
-
-    func showUpdateInstalledAndRelaunched(_ relaunched: Bool, acknowledgement: @escaping () -> Void) {
-        Task { @MainActor in
-            UpdateManager.shared.installed(relaunched: relaunched)
-        }
-        acknowledgement()
-    }
-
-    func dismissUpdateInstallation() {
-        Task { @MainActor in
-            UpdateManager.shared.dismiss()
-        }
-    }
-
-    // MARK: - Resume/Focus
-
-    func showUpdateInFocus() {
-        // Could expand notch here if desired
-    }
-
-    func showResumableUpdateFound(with appcastItem: SUAppcastItem, state: SPUUserUpdateState, reply: @escaping (SPUUserUpdateChoice) -> Void) {
-        // Resumable update - treat same as regular update found
-        showUpdateFound(with: appcastItem, state: state, reply: reply)
-    }
-
-    func showInformationalUpdateFound(with appcastItem: SUAppcastItem, state: SPUUserUpdateState, reply: @escaping (SPUUserUpdateChoice) -> Void) {
-        // Informational only - dismiss for now
-        reply(.dismiss)
     }
 }
