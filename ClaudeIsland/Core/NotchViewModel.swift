@@ -104,6 +104,10 @@ class NotchViewModel: ObservableObject {
     private let events = EventMonitors.shared
     private var hoverTimer: DispatchWorkItem?
     private var autoDismissTask: Task<Void, Never>?
+    private var idleCloseTimer: DispatchWorkItem?
+
+    /// Seconds of mouse-outside before auto-closing the opened notch
+    private let idleCloseDelay: TimeInterval = 10
 
     // MARK: - Initialization
 
@@ -183,6 +187,25 @@ class NotchViewModel: ObservableObject {
             }
             hoverTimer = workItem
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: workItem)
+        }
+
+        // Auto-close after idleCloseDelay when mouse leaves the opened notch
+        if status == .opened {
+            if isHovering {
+                // Mouse entered — cancel any pending idle-close
+                idleCloseTimer?.cancel()
+                idleCloseTimer = nil
+            } else {
+                // Mouse left — start idle-close timer (skip for chat mode, user may be reading/typing)
+                guard !isInChatMode else { return }
+                idleCloseTimer?.cancel()
+                let workItem = DispatchWorkItem { [weak self] in
+                    guard let self = self, self.status == .opened, !self.isHovering else { return }
+                    self.notchClose()
+                }
+                idleCloseTimer = workItem
+                DispatchQueue.main.asyncAfter(deadline: .now() + idleCloseDelay, execute: workItem)
+            }
         }
     }
 
@@ -291,6 +314,8 @@ class NotchViewModel: ObservableObject {
 
     func notchClose() {
         cancelAutoDismiss()
+        idleCloseTimer?.cancel()
+        idleCloseTimer = nil
         // Save chat session before closing if in chat mode
         if case .chat(let session) = contentType {
             currentChatSession = session
@@ -318,6 +343,9 @@ class NotchViewModel: ObservableObject {
         if case .chat(let current) = contentType, current.sessionId == session.sessionId {
             return
         }
+        // Cancel idle-close when entering chat — user is actively reading
+        idleCloseTimer?.cancel()
+        idleCloseTimer = nil
         contentType = .chat(session)
     }
 
