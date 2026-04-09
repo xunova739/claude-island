@@ -69,6 +69,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Mixpanel.mainInstance().flush()
 
         HookInstaller.installIfNeeded()
+        // Request accessibility permission once at startup (needed for window-level focus)
+        _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt: true] as CFDictionary)
         NSApplication.shared.setActivationPolicy(.accessory)
 
         windowManager = WindowManager()

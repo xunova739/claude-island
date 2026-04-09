@@ -100,10 +100,10 @@ struct ClaudeInstancesView: View {
             // Fallback: find host app PID (terminal, Obsidian, IDE, etc.) via process tree
             if let sessionPid = session.pid {
                 let tree = ProcessTreeBuilder.shared.buildTree()
-                // Build set of running app PIDs for fallback matching
-                let runningPids = Set(NSWorkspace.shared.runningApplications.map { Int($0.processIdentifier) })
+                // Use CGWindowList to find PIDs of apps with visible windows (thread-safe, catches IDE helpers)
+                let windowPids = Self.visibleWindowOwnerPids()
                 let hostPid = ProcessTreeBuilder.shared.findTerminalOrHostPid(
-                    forProcess: sessionPid, tree: tree, runningPids: runningPids
+                    forProcess: sessionPid, tree: tree, runningPids: windowPids
                 )
                 if let terminalPid = hostPid {
                     // Try AX window-level focus first (works with multiple windows)
@@ -141,6 +141,18 @@ struct ClaudeInstancesView: View {
 
     private func archiveSession(_ session: SessionState) {
         sessionMonitor.archiveSession(sessionId: session.sessionId)
+    }
+
+    /// PIDs of all apps that own visible windows (layer 0). Thread-safe via CoreGraphics.
+    private static func visibleWindowOwnerPids() -> Set<Int> {
+        let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] else {
+            return []
+        }
+        return Set(list.compactMap { dict -> Int? in
+            guard (dict[kCGWindowLayer as String] as? Int) == 0 else { return nil }
+            return dict[kCGWindowOwnerPID as String] as? Int
+        })
     }
 }
 

@@ -416,9 +416,9 @@ struct NotchView: View {
             // AX window focus + host app fallback (handles Obsidian, IDEs, etc.)
             if let sessionPid = session.pid {
                 let tree = ProcessTreeBuilder.shared.buildTree()
-                let runningPids = Set(NSWorkspace.shared.runningApplications.map { Int($0.processIdentifier) })
+                let windowPids = visibleWindowOwnerPids()
                 let hostPid = ProcessTreeBuilder.shared.findTerminalOrHostPid(
-                    forProcess: sessionPid, tree: tree, runningPids: runningPids
+                    forProcess: sessionPid, tree: tree, runningPids: windowPids
                 )
                 if let terminalPid = hostPid {
                     if AccessibilityWindowFocuser.focusTerminalWindow(terminalPid: terminalPid, session: session) {
@@ -605,6 +605,18 @@ struct NotchView: View {
 
     /// Determine if notification sound should play for the given sessions
     /// Returns true if ANY session is not actively focused
+    /// PIDs of all apps that own visible windows (layer 0). Thread-safe via CoreGraphics.
+    private func visibleWindowOwnerPids() -> Set<Int> {
+        let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let list = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] else {
+            return []
+        }
+        return Set(list.compactMap { dict -> Int? in
+            guard (dict[kCGWindowLayer as String] as? Int) == 0 else { return nil }
+            return dict[kCGWindowOwnerPID as String] as? Int
+        })
+    }
+
     private func shouldPlayNotificationSound(for sessions: [SessionState]) async -> Bool {
         for session in sessions {
             guard let pid = session.pid else {

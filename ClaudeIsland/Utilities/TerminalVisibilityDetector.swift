@@ -62,7 +62,26 @@ struct TerminalVisibilityDetector {
                 return false
             }
 
-            return sessionTerminalPid == Int(frontmostApp.processIdentifier)
+            guard sessionTerminalPid == Int(frontmostApp.processIdentifier) else {
+                return false
+            }
+
+            // If the terminal app has multiple visible windows (e.g. Ghostty with multiple windows),
+            // we can't determine which window the user is actually viewing without deep integration.
+            // Be conservative: assume the user might be in a different window, so show the notification.
+            let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+            if let windowList = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] {
+                let windowCount = windowList.filter {
+                    ($0[kCGWindowOwnerPID as String] as? Int) == sessionTerminalPid &&
+                    ($0[kCGWindowLayer as String] as? Int) == 0
+                }.count
+                if windowCount > 1 {
+                    // Multiple windows open — can't determine focus, show notification to be safe
+                    return false
+                }
+            }
+
+            return true
         }
     }
 }
