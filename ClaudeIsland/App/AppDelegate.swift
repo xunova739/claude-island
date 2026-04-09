@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import IOKit
 import Mixpanel
 import Sparkle
@@ -70,7 +71,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         HookInstaller.installIfNeeded()
         // Request accessibility permission once at startup (needed for window-level focus)
-        _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt: true] as CFDictionary)
+        let axOptions = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as AnyHashable: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(axOptions)
         NSApplication.shared.setActivationPolicy(.accessory)
 
         windowManager = WindowManager()
