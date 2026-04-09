@@ -483,7 +483,15 @@ struct NotchView: View {
         let newPendingIds = currentIds.subtracting(previousPendingIds)
 
         if !newPendingIds.isEmpty && viewModel.status == .closed {
-            let newSessions = sessions.filter { newPendingIds.contains($0.stableId) }
+            // Filter out sessions that will be auto-approved — no need to show a notification card
+            let newSessions = sessions.filter {
+                newPendingIds.contains($0.stableId) &&
+                !sessionMonitor.autoApproveSessions.contains($0.sessionId)
+            }
+            guard !newSessions.isEmpty else {
+                previousPendingIds = currentIds
+                return
+            }
             Task { @MainActor in
                 // Only suppress notification if the specific Claude session is frontmost.
                 // Other terminal windows (or any other app) should still trigger the notch.

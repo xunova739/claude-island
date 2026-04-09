@@ -16,7 +16,7 @@ class ClaudeSessionMonitor: ObservableObject {
     @Published var pendingInstances: [SessionState] = []
 
     /// Sessions for which all future permissions should be auto-approved
-    private var autoApproveSessions: Set<String> = []
+    @Published private(set) var autoApproveSessions: Set<String> = []
 
     private var cancellables = Set<AnyCancellable>()
 
