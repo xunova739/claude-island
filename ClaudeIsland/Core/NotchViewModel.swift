@@ -107,7 +107,7 @@ class NotchViewModel: ObservableObject {
     private var idleCloseTimer: DispatchWorkItem?
 
     /// Seconds of mouse-outside before auto-closing the opened notch
-    private let idleCloseDelay: TimeInterval = 10
+    private let idleCloseDelay: TimeInterval = 5
 
     // MARK: - Initialization
 
