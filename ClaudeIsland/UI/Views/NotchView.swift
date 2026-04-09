@@ -177,6 +177,10 @@ struct NotchView: View {
                         withAnimation(.spring(response: 0.38, dampingFraction: 0.8)) {
                             isHovering = hovering
                         }
+                        // Cancel auto-dismiss when user hovers over the notch
+                        if hovering && viewModel.autoDismissCountdown > 0 {
+                            viewModel.cancelAutoDismiss()
+                        }
                     }
                     .onTapGesture {
                         if viewModel.status != .opened {
@@ -204,6 +208,7 @@ struct NotchView: View {
         .onChange(of: sessionMonitor.instances) { _, instances in
             handleProcessingChange()
             handleWaitingForInputChange(instances)
+            handleNotificationCardStaleness(instances)
         }
     }
 
@@ -363,10 +368,66 @@ struct NotchView: View {
                     sessionMonitor: sessionMonitor,
                     viewModel: viewModel
                 )
+            case .notification(let session):
+                notificationCardForSession(session)
             }
         }
         .frame(width: notchSize.width - 24) // Fixed width to prevent text reflow
         // Removed .id() - was causing view recreation and performance issues
+    }
+
+    @ViewBuilder
+    private func notificationCardForSession(_ session: SessionState) -> some View {
+        // Use live session data instead of stale snapshot
+        let liveSession = sessionMonitor.instances.first { $0.sessionId == session.sessionId } ?? session
+        NotificationCardView(
+            session: liveSession,
+            countdown: viewModel.autoDismissCountdown,
+            onApprove: {
+                sessionMonitor.approvePermission(sessionId: session.sessionId)
+                viewModel.notchClose()
+            },
+            onDeny: {
+                sessionMonitor.denyPermission(sessionId: session.sessionId, reason: nil)
+                viewModel.notchClose()
+            },
+            onApproveAll: {
+                sessionMonitor.approveAllPermissions(sessionId: session.sessionId)
+                viewModel.notchClose()
+            },
+            onChat: {
+                viewModel.cancelAutoDismiss()
+                viewModel.showChat(for: session)
+            },
+            onFocus: { focusSessionFromNotch(session) },
+            onDismiss: { viewModel.notchClose() }
+        )
+    }
+
+    private func focusSessionFromNotch(_ session: SessionState) {
+        viewModel.notchClose()
+        Task {
+            // Try yabai first for tmux
+            if session.isInTmux, let pid = session.pid {
+                if await YabaiController.shared.focusWindow(forClaudePid: pid) {
+                    return
+                }
+            }
+            // AX window focus
+            if let sessionPid = session.pid {
+                let tree = ProcessTreeBuilder.shared.buildTree()
+                if let terminalPid = ProcessTreeBuilder.shared.findTerminalPid(forProcess: sessionPid, tree: tree) {
+                    if AccessibilityWindowFocuser.focusTerminalWindow(terminalPid: terminalPid, session: session) {
+                        return
+                    }
+                    await MainActor.run {
+                        if let app = NSRunningApplication(processIdentifier: pid_t(terminalPid)) {
+                            _ = app.activate(options: .activateIgnoringOtherApps)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Event Handlers
@@ -433,7 +494,11 @@ struct NotchView: View {
                     }
                 }
                 if !claudeSessionFocused && viewModel.status == .closed {
-                    viewModel.notchOpen(reason: .notification)
+                    if let triggerSession = newSessions.first {
+                        viewModel.notchOpenForNotification(session: triggerSession)
+                    } else {
+                        viewModel.notchOpen(reason: .notification)
+                    }
                 }
             }
         }
@@ -486,6 +551,21 @@ struct NotchView: View {
                 }
             }
 
+            // Open notification card for the completed session (if not focused)
+            if viewModel.status == .closed, let session = newlyWaitingSessions.first {
+                Task {
+                    let isFocused: Bool
+                    if let pid = session.pid {
+                        isFocused = await TerminalVisibilityDetector.isSessionFocused(sessionPid: pid)
+                    } else {
+                        isFocused = false
+                    }
+                    if !isFocused && viewModel.status == .closed {
+                        viewModel.notchOpenForNotification(session: session)
+                    }
+                }
+            }
+
             // Schedule hiding the checkmark after 30 seconds
             DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [self] in
                 // Trigger a UI update to re-evaluate hasWaitingForInput
@@ -494,6 +574,23 @@ struct NotchView: View {
         }
 
         previousWaitingForInputIds = currentIds
+    }
+
+    /// Auto-dismiss notification card if the session's phase changed (e.g., approved from terminal)
+    private func handleNotificationCardStaleness(_ instances: [SessionState]) {
+        guard case .notification(let notifSession) = viewModel.contentType else { return }
+
+        // Find the live session
+        guard let liveSession = instances.first(where: { $0.sessionId == notifSession.sessionId }) else {
+            // Session gone — dismiss
+            viewModel.notchClose()
+            return
+        }
+
+        // If the session is no longer needing attention (was approved/denied from terminal, or started processing again), dismiss
+        if !liveSession.needsAttention {
+            viewModel.notchClose()
+        }
     }
 
     /// Determine if notification sound should play for the given sessions

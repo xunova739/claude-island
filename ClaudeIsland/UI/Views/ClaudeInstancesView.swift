@@ -97,10 +97,15 @@ struct ClaudeInstancesView: View {
                 }
             }
 
-            // Fallback: find terminal PID via process tree and activate via NSRunningApplication
+            // Fallback: find terminal PID and focus specific window via Accessibility API
             if let sessionPid = session.pid {
                 let tree = ProcessTreeBuilder.shared.buildTree()
                 if let terminalPid = ProcessTreeBuilder.shared.findTerminalPid(forProcess: sessionPid, tree: tree) {
+                    // Try AX window-level focus first (works with multiple windows)
+                    if AccessibilityWindowFocuser.focusTerminalWindow(terminalPid: terminalPid, session: session) {
+                        return
+                    }
+                    // Fall back to app-level activation
                     await MainActor.run {
                         if let app = NSRunningApplication(processIdentifier: pid_t(terminalPid)) {
                             _ = app.activate(options: .activateIgnoringOtherApps)

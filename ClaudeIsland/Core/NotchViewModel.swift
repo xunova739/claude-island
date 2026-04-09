@@ -27,12 +27,14 @@ enum NotchContentType: Equatable {
     case instances
     case menu
     case chat(SessionState)
+    case notification(SessionState)
 
     var id: String {
         switch self {
         case .instances: return "instances"
         case .menu: return "menu"
         case .chat(let session): return "chat-\(session.sessionId)"
+        case .notification(let session): return "notification-\(session.sessionId)"
         }
     }
 }
@@ -45,6 +47,7 @@ class NotchViewModel: ObservableObject {
     @Published var openReason: NotchOpenReason = .unknown
     @Published var contentType: NotchContentType = .instances
     @Published var isHovering: Bool = false
+    @Published var autoDismissCountdown: Int = 0
 
     // MARK: - Dependencies
 
@@ -81,6 +84,11 @@ class NotchViewModel: ObservableObject {
                 width: min(screenRect.width * 0.4, 480),
                 height: 320
             )
+        case .notification:
+            return CGSize(
+                width: min(screenRect.width * 0.4, 480),
+                height: 220
+            )
         }
     }
 
@@ -95,6 +103,7 @@ class NotchViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private let events = EventMonitors.shared
     private var hoverTimer: DispatchWorkItem?
+    private var autoDismissTask: Task<Void, Never>?
 
     // MARK: - Initialization
 
@@ -143,6 +152,11 @@ class NotchViewModel: ObservableObject {
         return false
     }
 
+    private var isInNotificationMode: Bool {
+        if case .notification = contentType { return true }
+        return false
+    }
+
     /// The chat session we're viewing (persists across close/open)
     private var currentChatSession: SessionState?
 
@@ -182,8 +196,8 @@ class NotchViewModel: ObservableObject {
                 // Re-post the click so it reaches the window/app behind us
                 repostClickAt(location)
             } else if geometry.notchScreenRect.contains(location) {
-                // Clicking notch while opened - only close if NOT in chat mode
-                if !isInChatMode {
+                // Clicking notch while opened - only close if NOT in chat/notification mode
+                if !isInChatMode && !isInNotificationMode {
                     notchClose()
                 }
             }
@@ -247,7 +261,36 @@ class NotchViewModel: ObservableObject {
         }
     }
 
+    func notchOpenForNotification(session: SessionState) {
+        openReason = .notification
+        status = .opened
+        contentType = .notification(session)
+        currentChatSession = nil
+        startAutoDismissTimer()
+    }
+
+    func cancelAutoDismiss() {
+        autoDismissTask?.cancel()
+        autoDismissTask = nil
+        autoDismissCountdown = 0
+    }
+
+    private func startAutoDismissTimer() {
+        autoDismissTask?.cancel()
+        autoDismissCountdown = 10
+        autoDismissTask = Task { [weak self] in
+            for i in stride(from: 10, through: 1, by: -1) {
+                guard !Task.isCancelled else { return }
+                await MainActor.run { self?.autoDismissCountdown = i }
+                try? await Task.sleep(for: .seconds(1))
+            }
+            guard !Task.isCancelled else { return }
+            await MainActor.run { self?.notchClose() }
+        }
+    }
+
     func notchClose() {
+        cancelAutoDismiss()
         // Save chat session before closing if in chat mode
         if case .chat(let session) = contentType {
             currentChatSession = session
