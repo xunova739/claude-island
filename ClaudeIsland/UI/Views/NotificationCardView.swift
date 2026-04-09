@@ -129,18 +129,29 @@ struct NotificationCardView: View {
 
     @ViewBuilder
     private var completionContent: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 16))
-                .foregroundColor(TerminalColors.green)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 14))
+                    .foregroundColor(TerminalColors.green)
 
-            Text("任务完成")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.white.opacity(0.8))
+                Text("任务完成")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(TerminalColors.green)
 
-            Spacer()
+                Spacer()
+            }
+
+            // Show last message from Claude if available
+            if let lastMsg = session.lastMessage, !lastMsg.isEmpty {
+                Text(lastMsg)
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.7))
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .padding(8)
+        .padding(10)
         .background(Color.white.opacity(0.05))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
