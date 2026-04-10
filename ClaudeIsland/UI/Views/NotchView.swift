@@ -482,9 +482,19 @@ struct NotchView: View {
         switch newStatus {
         case .opened, .popping:
             isVisible = true
-            // Clear waiting-for-input timestamps only when manually opened (user acknowledged)
             if viewModel.openReason == .click || viewModel.openReason == .hover {
                 waitingForInputTimestamps.removeAll()
+                // If manually opened and there's a pending approval the user missed,
+                // show the approval notification card instead of the instances list
+                if case .instances = viewModel.contentType {
+                    if let pendingApproval = sessionMonitor.pendingInstances.first(where: {
+                        $0.phase.isWaitingForApproval &&
+                        !sessionMonitor.autoApproveSessions.contains($0.sessionId)
+                    }) {
+                        viewModel.contentType = .notification(pendingApproval)
+                        viewModel.cancelAutoDismiss()  // Approval card: no countdown
+                    }
+                }
             }
         case .closed:
             // Don't hide on non-notched devices - users need a visible target

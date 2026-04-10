@@ -299,7 +299,13 @@ class NotchViewModel: ObservableObject {
         status = .opened
         contentType = .notification(session)
         currentChatSession = nil
-        startAutoDismissTimer()
+        // Only auto-dismiss completion cards (waitingForInput).
+        // Approval cards (waitingForApproval) must persist until user acts.
+        if !session.phase.isWaitingForApproval {
+            startAutoDismissTimer()
+        } else {
+            cancelAutoDismiss()
+        }
     }
 
     func cancelAutoDismiss() {
