@@ -380,9 +380,11 @@ struct NotchView: View {
     private func notificationCardForSession(_ session: SessionState) -> some View {
         let liveSession = sessionMonitor.instances.first { $0.sessionId == session.sessionId } ?? session
         // Count other sessions also needing attention (excluding current)
+        // Only count approval sessions in the badge (completions don't queue)
         let otherPendingCount = sessionMonitor.pendingInstances.filter {
             $0.sessionId != session.sessionId &&
-            !sessionMonitor.autoApproveSessions.contains($0.sessionId)
+            !sessionMonitor.autoApproveSessions.contains($0.sessionId) &&
+            $0.phase.isWaitingForApproval
         }.count
         NotificationCardView(
             session: liveSession,
@@ -405,7 +407,14 @@ struct NotchView: View {
                 viewModel.showChat(for: session)
             },
             onFocus: { focusSessionFromNotch(session) },
-            onDismiss: { showNextPendingOrClose(excluding: session.sessionId) }
+            // Completion cards: just close. Approval cards: advance to next pending.
+            onDismiss: {
+                if liveSession.phase.isWaitingForApproval {
+                    showNextPendingOrClose(excluding: session.sessionId)
+                } else {
+                    viewModel.notchClose()
+                }
+            }
         )
     }
 
