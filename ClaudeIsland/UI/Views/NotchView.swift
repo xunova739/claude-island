@@ -23,6 +23,8 @@ struct NotchView: View {
     @State private var previousPendingIds: Set<String> = []
     @State private var previousWaitingForInputIds: Set<String> = []
     @State private var waitingForInputTimestamps: [String: Date] = [:]  // sessionId -> when it entered waitingForInput
+    /// Sessions that actually processed something (so completion notification is meaningful)
+    @State private var sessionsWithProcessingHistory: Set<String> = []
     @State private var isVisible: Bool = false
     @State private var isHovering: Bool = false
     @State private var isBouncing: Bool = false
@@ -206,6 +208,14 @@ struct NotchView: View {
             handlePendingSessionsChange(sessions)
         }
         .onChange(of: sessionMonitor.instances) { _, instances in
+            // Track which sessions have actually done processing work
+            for session in instances where session.phase == .processing || session.phase == .compacting {
+                sessionsWithProcessingHistory.insert(session.stableId)
+            }
+            // Clean up ended sessions
+            let activeIds = Set(instances.map { $0.stableId })
+            sessionsWithProcessingHistory = sessionsWithProcessingHistory.filter { activeIds.contains($0) }
+
             handleProcessingChange()
             handleWaitingForInputChange(instances)
             handleNotificationCardStaleness(instances)
@@ -602,12 +612,19 @@ struct NotchView: View {
             // Open notification card for the completed session (if not focused).
             // Delay 1.5s: Claude sometimes fires Stop briefly between tool calls before
             // continuing with the final summary. Only show if still waitingForInput after delay.
-            if let session = newlyWaitingSessions.first {
+            // Only notify for sessions that actually did processing work.
+            // Filters out sessions that just started (SessionStart → idle/waitingForInput)
+            // without ever processing a task.
+            let notifiableSessions = newlyWaitingSessions.filter {
+                sessionsWithProcessingHistory.contains($0.stableId)
+            }
+            if let session = notifiableSessions.first {
                 let stableId = session.stableId
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [self] in
                     // Verify session is still waitingForInput (not back to processing)
                     guard let liveSession = sessionMonitor.instances.first(where: { $0.stableId == stableId }),
                           liveSession.phase == .waitingForInput,
+                          sessionsWithProcessingHistory.contains(stableId),  // double-check
                           viewModel.status == .closed else { return }
                     Task {
                         let isFocused: Bool

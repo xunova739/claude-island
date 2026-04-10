@@ -180,8 +180,8 @@ def main():
         state["status"] = "processing"
 
     elif event == "SessionStart":
-        # New session starts waiting for user input
-        state["status"] = "waiting_for_input"
+        # New session just started — idle, not a completed task
+        state["status"] = "idle"
 
     elif event == "SessionEnd":
         state["status"] = "ended"
