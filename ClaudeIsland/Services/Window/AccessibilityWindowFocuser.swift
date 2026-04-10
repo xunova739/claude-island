@@ -82,8 +82,8 @@ struct AccessibilityWindowFocuser {
 
         // Build search terms from session info
         let searchTerms = buildSearchTerms(session: session)
-        guard !searchTerms.isEmpty else { return false }
 
+        // Try title matching first
         for window in windows {
             var titleRef: CFTypeRef?
             let titleResult = AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &titleRef)
@@ -93,6 +93,21 @@ struct AccessibilityWindowFocuser {
             for term in searchTerms {
                 if titleLower.contains(term.lowercased()) {
                     AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+                    activateApp(pid: terminalPid)
+                    return true
+                }
+            }
+        }
+
+        // Title matching failed — if exactly 2 windows, raise the non-focused one.
+        // The user is in the other window, so the Claude window is the other one.
+        if windows.count == 2 {
+            var focusedRef: CFTypeRef?
+            AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &focusedRef)
+            if let focusedRef = focusedRef {
+                let focused = focusedRef as! AXUIElement
+                if let target = windows.first(where: { !CFEqual($0, focused) }) {
+                    AXUIElementPerformAction(target, kAXRaiseAction as CFString)
                     activateApp(pid: terminalPid)
                     return true
                 }
@@ -138,6 +153,9 @@ struct AccessibilityWindowFocuser {
         if session.projectName != cwdLastComponent {
             terms.append(session.projectName)
         }
+
+        // "claude" — many terminals show the running process name as window title
+        terms.append("claude")
 
         // Use full cwd path
         if !session.cwd.isEmpty {
