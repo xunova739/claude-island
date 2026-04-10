@@ -89,7 +89,12 @@ struct ClaudeInstancesView: View {
     // MARK: - Actions
 
     private func focusSession(_ session: SessionState) {
+        // Close the notch first — open panel interferes with window activation
+        viewModel.notchClose()
         Task {
+            // Small delay to let the notch close animation start before activating terminal
+            try? await Task.sleep(for: .milliseconds(100))
+
             // Try yabai first for tmux sessions (precise pane switching)
             if session.isInTmux, let pid = session.pid {
                 if await YabaiController.shared.focusWindow(forClaudePid: pid) {
