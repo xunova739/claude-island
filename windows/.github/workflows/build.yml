@@ -1,0 +1,65 @@
+name: Build Claude Island
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Build
+        run: |
+          xcodebuild \
+            -scheme ClaudeIsland \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            SWIFT_STRICT_CONCURRENCY=minimal \
+            build
+
+      - name: Package DMG
+        run: |
+          APP_PATH=$(find build -name "Claude Island.app" | head -1)
+          mkdir -p dist
+          hdiutil create -volname "Claude Island" \
+            -srcfolder "$APP_PATH" \
+            -ov -format UDZO \
+            dist/ClaudeIsland-focused-notch.dmg
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClaudeIsland-focused-notch
+          path: dist/ClaudeIsland-focused-notch.dmg
+          retention-days: 30
+
+      - name: Publish latest-build release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
+          # Delete old release and tag if they exist
+          gh release delete latest-build --yes 2>/dev/null || true
+          git push origin --delete latest-build 2>/dev/null || true
+          # Force-update the tag to current commit
+          git tag -f latest-build
+          git push origin latest-build --force
+          # Create new release with DMG attached
+          gh release create latest-build \
+            dist/ClaudeIsland-focused-notch.dmg \
+            --title "Latest Build ($SHA)" \
+            --notes "Commit: $SHA  |  Built: $DATE" \
+            --prerelease

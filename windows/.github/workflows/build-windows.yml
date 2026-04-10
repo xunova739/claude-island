@@ -1,0 +1,72 @@
+name: Build Claude Island Windows (Electron)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Get build info
+        id: info
+        shell: pwsh
+        run: |
+          $sha = git rev-parse --short HEAD
+          $date = (Get-Date -AsUTC -Format "yyyy-MM-dd HH:mm") + " UTC"
+          echo "sha=$sha" >> $env:GITHUB_OUTPUT
+          echo "date=$date" >> $env:GITHUB_OUTPUT
+
+      - name: Find installer
+        id: installer
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path dist -Filter "*.exe" -Recurse | Select-Object -First 1
+          if (-not $exe) { Write-Error "No .exe found in dist/"; exit 1 }
+          echo "path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+          echo "name=$($exe.Name)" >> $env:GITHUB_OUTPUT
+
+      - name: Publish latest-build release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $sha = "${{ steps.info.outputs.sha }}"
+          $date = "${{ steps.info.outputs.date }}"
+          $exePath = "${{ steps.installer.outputs.path }}"
+
+          # Delete old release and tag if they exist
+          gh release delete latest-build --yes 2>$null
+          git push origin --delete latest-build 2>$null
+
+          # Force-update the tag to current commit
+          git tag -f latest-build
+          git push origin latest-build --force
+
+          # Create new release with installer attached
+          gh release create latest-build `
+            $exePath `
+            --title "Latest Build ($sha) - $date" `
+            --notes "Commit: $sha | Built: $date" `
+            --prerelease
