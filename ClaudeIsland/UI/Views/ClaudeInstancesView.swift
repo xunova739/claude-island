@@ -71,12 +71,14 @@ struct ClaudeInstancesView: View {
                 ForEach(sortedInstances) { session in
                     InstanceRow(
                         session: session,
+                        isAutoApproveEnabled: sessionMonitor.autoApproveSessions.contains(session.sessionId),
                         onFocus: { focusSession(session) },
                         onChat: { openChat(session) },
                         onArchive: { archiveSession(session) },
                         onApprove: { approveSession(session) },
                         onReject: { rejectSession(session) },
-                        onApproveAll: { approveAllSession(session) }
+                        onApproveAll: { approveAllSession(session) },
+                        onCancelAutoApprove: { cancelAutoApprove(session) }
                     )
                     .id(session.stableId)
                 }
@@ -142,6 +144,10 @@ struct ClaudeInstancesView: View {
         sessionMonitor.approveAllPermissions(sessionId: session.sessionId)
     }
 
+    private func cancelAutoApprove(_ session: SessionState) {
+        sessionMonitor.cancelAutoApprove(sessionId: session.sessionId)
+    }
+
     private func archiveSession(_ session: SessionState) {
         sessionMonitor.archiveSession(sessionId: session.sessionId)
     }
@@ -174,12 +180,14 @@ struct ClaudeInstancesView: View {
 
 struct InstanceRow: View {
     let session: SessionState
+    let isAutoApproveEnabled: Bool
     let onFocus: () -> Void
     let onChat: () -> Void
     let onArchive: () -> Void
     let onApprove: () -> Void
     let onReject: () -> Void
     let onApproveAll: () -> Void
+    let onCancelAutoApprove: () -> Void
 
     @State private var isHovered = false
     @State private var spinnerPhase = 0
@@ -207,10 +215,26 @@ struct InstanceRow: View {
 
             // Text content
             VStack(alignment: .leading, spacing: 2) {
-                Text(session.displayTitle)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(session.displayTitle)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+
+                    // Auto-approve indicator — tap to cancel
+                    if isAutoApproveEnabled {
+                        Button(action: onCancelAutoApprove) {
+                            Text("全允")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(.black)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(Color(red: 1.0, green: 0.8, blue: 0.3))
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
 
                 // Show tool call when waiting for approval, otherwise last activity
                 if isWaitingForApproval, let toolName = session.pendingToolName {

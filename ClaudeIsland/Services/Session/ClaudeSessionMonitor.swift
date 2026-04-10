@@ -103,6 +103,11 @@ class ClaudeSessionMonitor: ObservableObject {
         approvePermission(sessionId: sessionId)
     }
 
+    /// Cancel auto-approve for a session (user wants to review permissions again)
+    func cancelAutoApprove(sessionId: String) {
+        autoApproveSessions.remove(sessionId)
+    }
+
     func denyPermission(sessionId: String, reason: String?) {
         Task {
             guard let session = await SessionStore.shared.session(for: sessionId),
