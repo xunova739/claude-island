@@ -42,49 +42,66 @@ struct TerminalVisibilityDetector {
     }
 
     /// Check if a Claude session is currently focused (user is looking at it).
-    /// Pass `cwd` for precise multi-window detection via focused window title matching.
+    /// Pass `cwd` for precise multi-window disambiguation via focused window title matching.
+    ///
+    /// Strategy: PID-ancestor alignment. We don't maintain a whitelist of
+    /// "known terminal" bundle IDs — instead we check whether the frontmost
+    /// app is an ancestor of the Claude process in the process tree. This
+    /// covers any host: Terminal.app, Ghostty, iTerm2, VSCode / Cursor / Zed /
+    /// Trae / Qcode, Obsidian (Terminal plugin), Raycast terminal extensions,
+    /// and any future embedded-terminal environment — without requiring
+    /// registry updates.
     static func isSessionFocused(sessionPid: Int, cwd: String? = nil) async -> Bool {
-        // If no terminal is frontmost, session is definitely not focused
-        guard isTerminalFrontmost() else {
+        guard let frontmostApp = NSWorkspace.shared.frontmostApplication else {
+            return false
+        }
+        let frontmostPid = Int(frontmostApp.processIdentifier)
+
+        let tree = ProcessTreeBuilder.shared.buildTree()
+
+        // tmux: delegate to pane-level focus detection (handles the case where
+        // the terminal is frontmost but the user is on a different pane).
+        if ProcessTreeBuilder.shared.isInTmux(pid: sessionPid, tree: tree) {
+            return await TmuxTargetFinder.shared.isSessionPaneActive(claudePid: sessionPid)
+        }
+
+        // Core check: is the frontmost app an ancestor of the Claude process?
+        guard ProcessTreeBuilder.shared.isDescendant(
+            targetPid: sessionPid,
+            ofAncestor: frontmostPid,
+            tree: tree
+        ) else {
             return false
         }
 
-        let tree = ProcessTreeBuilder.shared.buildTree()
-        let isInTmux = ProcessTreeBuilder.shared.isInTmux(pid: sessionPid, tree: tree)
-
-        if isInTmux {
-            return await TmuxTargetFinder.shared.isSessionPaneActive(claudePid: sessionPid)
-        } else {
-            guard let sessionTerminalPid = ProcessTreeBuilder.shared.findTerminalPid(forProcess: sessionPid, tree: tree),
-                  let frontmostApp = NSWorkspace.shared.frontmostApplication else {
-                return false
+        // Multi-window disambiguation: if we have cwd and AX access, check
+        // whether the focused window's title matches this session's cwd.
+        // A positive match is conclusive; a negative match is NOT — most
+        // terminals don't embed cwd in the default title, so we can't
+        // penalize a non-match.
+        if let sessionCwd = cwd, AXIsProcessTrusted() {
+            if isFocusedWindowForSession(terminalPid: frontmostPid, cwd: sessionCwd) {
+                return true
             }
-
-            // Terminal app must be frontmost
-            guard sessionTerminalPid == Int(frontmostApp.processIdentifier) else {
-                return false
-            }
-
-            // Primary check: use AXUIElement to get the focused window title and compare to session cwd.
-            // This works correctly even when windows are on different Spaces.
-            if let sessionCwd = cwd, AXIsProcessTrusted() {
-                return isFocusedWindowForSession(terminalPid: sessionTerminalPid, cwd: sessionCwd)
-            }
-
-            // Fallback: if multiple on-screen windows, can't determine focus → show notification
-            let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-            if let windowList = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] {
-                let windowCount = windowList.filter {
-                    ($0[kCGWindowOwnerPID as String] as? Int) == sessionTerminalPid &&
-                    ($0[kCGWindowLayer as String] as? Int) == 0
-                }.count
-                if windowCount > 1 {
-                    return false
-                }
-            }
-
-            return true
         }
+
+        // Fallback: if the host app has multiple on-screen windows and we
+        // couldn't confirm the match via title, conservatively treat as not
+        // focused (user may be looking at a different window of the same app).
+        // Single-window hosts — including embedded-terminal IDEs like Obsidian,
+        // Trae, Qcode, Raycast — fall through to "focused".
+        let opts: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        if let windowList = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) as? [[String: Any]] {
+            let windowCount = windowList.filter {
+                ($0[kCGWindowOwnerPID as String] as? Int) == frontmostPid &&
+                ($0[kCGWindowLayer as String] as? Int) == 0
+            }.count
+            if windowCount > 1 && cwd != nil {
+                return false
+            }
+        }
+
+        return true
     }
 
     /// Uses AX focused window title to determine if the user is looking at this specific session's window.
