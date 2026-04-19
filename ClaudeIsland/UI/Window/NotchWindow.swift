@@ -109,8 +109,11 @@ class NotchPanel: NSPanel {
 
         let mouseButton: CGMouseButton = event.type == .rightMouseDown || event.type == .rightMouseUp ? .right : .left
 
+        // Tag the synthesized event so our own global monitor can drop it.
+        let source = SyntheticEventMarker.markedSource()
+
         if let cgEvent = CGEvent(
-            mouseEventSource: nil,
+            mouseEventSource: source,
             mouseType: mouseType,
             mouseCursorPosition: cgPoint,
             mouseButton: mouseButton

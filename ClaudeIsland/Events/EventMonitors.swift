@@ -29,6 +29,10 @@ class EventMonitors {
         mouseMoveMonitor?.start()
 
         mouseDownMonitor = EventMonitor(mask: .leftMouseDown) { [weak self] event in
+            // Drop events we synthesized via `repostClickAt` / `repostMouseEvent`.
+            // Otherwise our own reposts loop back through this monitor and
+            // re-trigger `handleMouseDown` → `notchOpen`.
+            if SyntheticEventMarker.isSynthetic(event) { return }
             self?.mouseDown.send(event)
         }
         mouseDownMonitor?.start()
